@@ -1,9 +1,22 @@
 # Containerized-Web-App-with-Terraform-on-Azure
 
+## webstie view 
 
-![alt text](image.png)
+![alt text](website.png)
+
+## Appservice view 
+
+![appservice.png](appservice.png)
+
+## approval view
+
+![approval.png](approval.png)
+
+## pipeline view 
+
+![pipeline.png](pipeline.png)
 
 
-![alt text](image-1.png)
+## Paramaters view
 
-![alt text](image-2.png)
+![parameters.png](parameters.png)

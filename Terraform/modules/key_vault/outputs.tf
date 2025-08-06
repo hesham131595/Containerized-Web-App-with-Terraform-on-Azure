@@ -1,7 +1,8 @@
 output "acr_username_secret" {
-  value = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.acr_username.id})"
+  value = azurerm_key_vault_secret.acr_username.value
 }
 
 output "acr_password_secret" {
-  value = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.acr_password.id})"
+  value = azurerm_key_vault_secret.acr_password.value
+  sensitive = true
 }

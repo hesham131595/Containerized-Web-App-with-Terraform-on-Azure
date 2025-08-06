@@ -1,41 +1,136 @@
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: 'stretchaine'
+  - name: location
+    type: string
+    default: 'Canada EAST'
+  - name: acrName
+    type: string
+    default: 'stretchacr'
+  - name: acrSku
+    type: string
+    default: 'Basic'
+  - name: kvName
+    type: string
+    default: 'stretchkvne'
+  - name: acrUsernameSecretName
+    type: string
+    default: 'stretchacr-usernamene1'
+  - name: acrPasswordSecretName
+    type: string
+    default: 'stretchacr-passwordne1'
+  - name: networkName
+    type: string
+    default: 'stretch-vnetne'
+  - name: addressSpace
+    type: string
+    default: '10.0.0.0/16'
+  - name: subnetName
+    type: string
+    default: 'stretch-subnetne'
+  - name: subnetAddressPrefix
+    type: string
+    default: '10.0.1.0/24'
+  - name: webappName
+    type: string
+    default: 'stretch-webappne'
+  - name: initialImageName
+    type: string
+    default: 'nginx:latest'
+  - name: azurermServicePlanLocation
+    type: string
+    default: 'Canada EAST'
+
+variables:
+  IMAGE_TAG: "$(Build.BuildId)"
+  IMAGE_NAME: "mycontainerimage:$(IMAGE_TAG)"
+  IMAGE_FULL_PATH: "${{ parameters.acrName }}.azurecr.io/$(IMAGE_NAME)"
+  TERRAFORM_WORKING_DIR: "./Terraform"
+
 pool:
   name: linux-self-hosted-pool
 
-variables:
-  ACR_NAME: "stretchacr"
-  IMAGE_NAME: "mycontainerimage:latest"
-  IMAGE_FULL_PATH: "$(ACR_NAME).azurecr.io/$(IMAGE_NAME)"
-  TERRAFORM_WORKING_DIR: "./Terraform"
-
 stages:
-  - stage: TerraformDeploy
-    displayName: Terraform Plan and Apply
+  - stage: TerraformPlan
+    displayName: Terraform Plan
     jobs:
       - job: TerraformJob
         pool:
           name: linux-self-hosted-pool
         steps:
+          - checkout: self
+
           - task: AzureCLI@2
-            displayName: 'Terraform Init and Apply'
+            displayName: 'Terraform Init and Plan'
             inputs:
               azureSubscription: 'azureServiceConnectionnew1'
               scriptType: bash
               scriptLocation: inlineScript
               workingDirectory: $(TERRAFORM_WORKING_DIR)
               inlineScript: |
-                
                 terraform init
-                terraform plan -out=tfplan
-                terraform apply -auto-approve tfplan
+                terraform plan \
+                  -out=tfplan.out \
+                  -var="resource_group_name=${{ parameters.resourceGroupName }}" \
+                  -var="location=${{ parameters.location }}" \
+                  -var="acr_name=${{ parameters.acrName }}" \
+                  -var="acr_sku=${{ parameters.acrSku }}" \
+                  -var="kv_name=${{ parameters.kvName }}" \
+                  -var="acr_username_secret_name=${{ parameters.acrUsernameSecretName }}" \
+                  -var="acr_password_secret_name=${{ parameters.acrPasswordSecretName }}" \
+                  -var="network_name=${{ parameters.networkName }}" \
+                  -var="address_space=[\"${{ parameters.addressSpace }}\"]" \
+                  -var="subnet_name=${{ parameters.subnetName }}" \
+                  -var="subnet_address_prefix=[\"${{ parameters.subnetAddressPrefix }}\"]" \
+                  -var="webapp_name=${{ parameters.webappName }}" \
+                  -var="image_name=${{ parameters.initialImageName }}" \
+                  -var="azurerm_service_plan_location=${{ parameters.azurermServicePlanLocation }}"
+                # cp tfplan tfplan.out
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Terraform Plan'
+            inputs:
+              targetPath: '$(TERRAFORM_WORKING_DIR)/tfplan.out'
+              artifactName: terraformPlan
+
+  - stage: TerraformApply
+    displayName: "Terraform Apply"
+    dependsOn: TerraformPlan
+    condition: succeeded()
+    jobs:
+      - deployment: ApplyJob
+        displayName: "Terraform Apply (manual approval)"
+        environment: terraform-approval
+        pool:
+          name: linux-self-hosted-pool
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply'
+                  inputs:
+                    azureSubscription: 'azureServiceConnectionnew1'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    workingDirectory: $(TERRAFORM_WORKING_DIR)
+                    inlineScript: |
+                      terraform apply tfplan.out
+
 
   - stage: BuildAndPushImage
     displayName: Build and Push Docker Image
-    dependsOn: TerraformDeploy
+    dependsOn: TerraformApply
+    condition: succeeded()
     jobs:
       - job: BuildPush
         pool:
           name: linux-self-hosted-pool
         steps:
+          - checkout: self
+
           - task: AzureCLI@2
             displayName: 'Login to ACR and Push Image'
             inputs:
@@ -43,7 +138,30 @@ stages:
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
-                az acr login --name $ACR_NAME
+                az acr login --name ${{ parameters.acrName }}
                 docker build -t $IMAGE_FULL_PATH ./myapp
                 docker push $IMAGE_FULL_PATH
 
+          - task: AzureCLI@2
+            displayName: 'Update App Service Container Image'
+            inputs:
+              azureSubscription: 'azureServiceConnectionnew'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp config container set \
+                  --name ${{ parameters.webappName }} \
+                  --resource-group ${{ parameters.resourceGroupName }} \
+                  --docker-custom-image-name $IMAGE_FULL_PATH \
+                  --docker-registry-server-url https://${{ parameters.acrName }}.azurecr.io
+
+          - task: AzureCLI@2
+            displayName: 'Restart App Service'
+            inputs:
+              azureSubscription: 'azureServiceConnectionnew'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp restart \
+                  --name ${{ parameters.webappName }} \
+                  --resource-group ${{ parameters.resourceGroupName }}
